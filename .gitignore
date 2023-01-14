@@ -1,0 +1,7 @@
+/_docker
+/_web
+
+/node_modules
+
+/.env.*
+
