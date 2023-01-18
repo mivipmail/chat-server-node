@@ -6,11 +6,7 @@ const messageController = {
     connection: (io) => async (socket) => {
         const {user_id} = socket.handshake.query
 
-        const user = await User.findOne({
-            attributes: ['id', 'name', 'role'],
-            where: {id: user_id},
-        })
-
+        const user = await messageController.getUser(user_id)
         const message = await messageController.create(user, 'Вошел в чат')
 
         io.emit('connection', message)
@@ -23,43 +19,52 @@ const messageController = {
             }
         })
 
+
         socket.on('disconnection', async () => {
             const message = await messageController.create(user, 'Вышел из чата')
             io.emit('disconnection', message);
         })
 
-        socket.on('block', async (blocked_user_id) => {
+
+        socket.on('block', async (blockedUser) => {
             if (user.role === ROLES.GUEST) return
 
             const date = moment().add(BLOCK_TIMEOUT_IN_MINUTES, 'minutes').format('YYYY-MM-DD HH:mm:ss Z')
 
             if (await User.update(
                 {blockedUp: date},
-                {where: {id: blocked_user_id}}
+                {where: {id: blockedUser.id}}
             )) {
-                const message = await messageController.create(user, `${blocked_user_id} заблокирован на ${BLOCK_TIMEOUT_IN_MINUTES} минуту`)
+                // const lockedUser = await messageController.getUser(blocked_user_id)
+                const message = await messageController.create(user,
+                    `${blockedUser.name} заблокирован на ${BLOCK_TIMEOUT_IN_MINUTES} минуту`, blockedUser)
                 io.emit('block', message);
 
                 setTimeout(() => {
                     User.update(
                         {blockedUp: null},
-                        {where: {id: blocked_user_id}}
+                        {where: {id: blockedUser.id}}
                     )
                 }, BLOCK_TIMEOUT_IN_MINUTES * 60 * 1000)
             }
         }),
 
+
         socket.on('role', async (data) => {
             if (user.role !== ROLES.ADMIN) return
+
             const {user_id, role} = data
-            const changedUser = await User.findOne({where: {id: user_id}})
+            let changedUser = await User.findOne({where: {id: user_id}})
 
             if (changedUser.role !== role) {
                 if (await User.update(
                     {role: role},
                     {where: {id: user_id}}
                 )) {
-                    const message = await messageController.create(user, `${changedUser.name} теперь ${role}`)
+                    changedUser = await messageController.getUser(user_id)
+
+                    const message = await messageController.create(user,
+                        `${changedUser.name} теперь ${role}`, changedUser)
                     io.emit('role', message)
                 }
             }
@@ -67,10 +72,28 @@ const messageController = {
 
     },
 
-    async create(user, text) {
+
+    async create(user, text, payload=null) {
         const message = await Message.create({user_id: user.id, text})
-        return {id: message.id, text: message.text, user}
+        let data = {
+            id: message.id,
+            text: message.text,
+            time: moment(message.createdAt).format('HH:mm'),
+            user
+        }
+        if(payload)
+            data.payload = payload
+        return data
     },
+
+
+    async getUser(user_id) {
+        return await User.findOne({
+            attributes: ['id', 'name', 'role'],
+            where: {id: user_id},
+        })
+    },
+
 
     async isBlocked(user_id) {
         const user = await User.findOne({
@@ -80,6 +103,7 @@ const messageController = {
 
         return user.blockedUp !== null && moment(user.blockedUp) > moment()
     },
+
 
     async getLast() {
         const messages = await Message.findAll({
